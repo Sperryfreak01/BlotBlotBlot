@@ -18,6 +18,7 @@
       <column name="Name" sqlType="TEXT" precision="0" scale="-1" nullable="true" jdbcType="12"/>
       <column name="Occupation" sqlType="TEXT" precision="0" scale="-1" nullable="true" jdbcType="12"/>
       <column name="NextApperance" sqlType="TEXT" precision="0" scale="-1" nullable="true" jdbcType="12"/>
+      <column name="Sex" sqlType="TEXT" precision="0" scale="-1" nullable="true" jdbcType="12"/>
       <primary-key columns="casenumber"/>
       <foreign-key name="#FAKE_Arrests_1" columns="CaseNumber" ref-table="Incidents" ref-schema="" ref-catalog="" ref-columns="CaseNumber" update-rule="3" delete-rule="3" deferrability="1"/>
     </table>
@@ -31,7 +32,44 @@
       <column name="Lon" sqlType="REAL" precision="0" scale="-1" nullable="true" jdbcType="6"/>
       <column name="City" sqlType="TEXT" precision="0" scale="-1" nullable="true" jdbcType="12"/>
       <column name="CONFIDENCE" sqlType="INTEGER" precision="0" scale="-1" nullable="true" jdbcType="4"/>
+      <column name="Aresst" sqlType="BOOLEAN" precision="0" scale="-1" nullable="true" jdbcType="4" def="RkFMU0U="/>
       <primary-key columns="casenumber"/>
+      <index name="Incidents_Date_City_index" unique="true" columns="Date,City"/>
+      <index name="Incidents_Date_index" unique="true" columns="Date,CaseNumber"/>
+    </table>
+    <table name="NoteSearch" schema="" catalog="" type="TABLE">
+      <column name="CaseNumber" sqlType="" precision="0" scale="-1" nullable="true" jdbcType="12"/>
+      <column name="Notes" sqlType="" precision="0" scale="-1" nullable="true" jdbcType="12"/>
+    </table>
+    <table name="NoteSearch_content" schema="" catalog="" type="TABLE">
+      <column name="docid" sqlType="INTEGER" precision="0" scale="-1" nullable="true" jdbcType="4"/>
+      <column name="c0CaseNumber" sqlType="" precision="0" scale="-1" nullable="true" jdbcType="12"/>
+      <column name="c1Notes" sqlType="" precision="0" scale="-1" nullable="true" jdbcType="12"/>
+      <primary-key columns="docid"/>
+    </table>
+    <table name="NoteSearch_docsize" schema="" catalog="" type="TABLE">
+      <column name="docid" sqlType="INTEGER" precision="0" scale="-1" nullable="true" jdbcType="4"/>
+      <column name="size" sqlType="BLOB" precision="0" scale="-1" nullable="true" jdbcType="12"/>
+      <primary-key columns="docid"/>
+    </table>
+    <table name="NoteSearch_segdir" schema="" catalog="" type="TABLE">
+      <column name="level" sqlType="INTEGER" precision="0" scale="-1" nullable="true" jdbcType="4"/>
+      <column name="idx" sqlType="INTEGER" precision="0" scale="-1" nullable="true" jdbcType="4"/>
+      <column name="start_block" sqlType="INTEGER" precision="0" scale="-1" nullable="true" jdbcType="4"/>
+      <column name="leaves_end_block" sqlType="INTEGER" precision="0" scale="-1" nullable="true" jdbcType="4"/>
+      <column name="end_block" sqlType="INTEGER" precision="0" scale="-1" nullable="true" jdbcType="4"/>
+      <column name="root" sqlType="BLOB" precision="0" scale="-1" nullable="true" jdbcType="12"/>
+      <primary-key columns="idx"/>
+    </table>
+    <table name="NoteSearch_segments" schema="" catalog="" type="TABLE">
+      <column name="blockid" sqlType="INTEGER" precision="0" scale="-1" nullable="true" jdbcType="4"/>
+      <column name="block" sqlType="BLOB" precision="0" scale="-1" nullable="true" jdbcType="12"/>
+      <primary-key columns="blockid"/>
+    </table>
+    <table name="NoteSearch_stat" schema="" catalog="" type="TABLE">
+      <column name="id" sqlType="INTEGER" precision="0" scale="-1" nullable="true" jdbcType="4"/>
+      <column name="value" sqlType="BLOB" precision="0" scale="-1" nullable="true" jdbcType="12"/>
+      <primary-key columns="id"/>
     </table>
   </data-source>
 </component>

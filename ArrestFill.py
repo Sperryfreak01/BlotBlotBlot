@@ -3,105 +3,126 @@ import records # https://github.com/kennethreitz/records
 from BeautifulSoup import BeautifulSoup
 from folium import plugins, folium
 import geocoder
-
-db = records.Database('sqlite:///blot.db')
-BlotterURL = "http://ws.ocsd.org/Blotter/BlotterSearch.aspx"
-
-cityList = {'AV':'ALISO VIEJO', 'AN':'ANAHEIM', 'BR':'BREA', 'BP':'BUENA PARK', 'CN':'ORANGE COUNTY',
-            'CS':'ORANGE COUNTY', 'CM':'COSTA MESA', 'CZ':'COTO DE CAZA', 'ON':'ORANGE COUNTY',
-            'OS':'ORANGE COUNTY', 'CY':'CYPRESS', 'DP':'DANA POINT', 'DH':'DANA POINT', 'FA':'ORANGE COUNTY',
-            'FV':'FOUNTAIN VALLEY', 'FU':'FULLERTON', 'GG':'GARDEN GROVE', 'HB':'HUNTINGTON BEACH', 'IR':'IRVINE',
-            'JW':'JOHN WAYNE AIRPORT', 'LR':'LA HABRA', 'LM':'LA MIRADA', 'LP':'LA PALMA', 'LD':'LADERA RANCH',
-            'LB':'LAGUNA BEACH', 'LH':'LAGUNA HILLS', 'LN':'LAGUNA NIGUEL', 'LW':'LAGUNA WOODS', 'LF':'LAKE FOREST',
-            'FL':'LAS FLORES', 'LA':'LOS ALAMITOS', 'MC':'MIDWAY CITY', 'MV':'MISSION VIEJO', 'NB':'NEWPORT BEACH',
-            'NH':'NEWPORT BEACH', 'OR':'ORANGE', 'OC':'ORANGE COUNTY', 'PL':'PLACENTIA',
-            'RV':'RANCHO MISSION VIEJO', 'RS':'RANCHO SANTA MARGARITA','RO':'ROSSMOOR', 'SC':'SAN CLEMENTE',
-            'SJ':'SAN JUAN CAPISTRANO', 'SA':'SANTA ANA', 'SB':'SEAL BEACH', 'SI':'SILVERADO CANYON', 'ST':'STANTON',
-            'SN':'SUNSET BEACH', 'TC':'TRABUCO CANYON', 'TU':'TUSTIN', 'VP':'VILLA PARK', 'WE':'WESTMINSTER',
-            'YL':'YORBA LINDA'}
-
-session = requests.Session()
-r = session.get(BlotterURL)
-
-if r.status_code != requests.codes.ok:
-    sys.exit()
-
-soup = BeautifulSoup(r.content)
-
-# ASP validation and session fields
-input_fields = soup.findAll("input", {'type':'hidden'})
-
-for inputs in input_fields:
-    if inputs['id'] == '__VIEWSTATE':
-        ViewState = inputs['value']
-        #print ViewState
-    if inputs['id'] == '__VIEWSTATEGENERATOR':
-        ViewStateGen = inputs['value']
-        #print ViewStateGen
-    if inputs['id'] == '__EVENTVALIDATION':
-        EventValidation = inputs['value']
-        #print EventValidation
-headers = {
-    'accept': "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-    'origin': "http//ws.ocsd.org",
-    'x-devtools-emulate-network-conditions-client-id': "3D54FA71-2ADC-4CB2-8140-B266EC5E9596",
-    'upgrade-insecure-requests': "1",
-    'user-agent': "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/48.0.2564.109 Safari/537.36",
-    'content-type': "application/x-www-form-urlencoded",
-    'dnt': "1",
-    'referer': "http//ws.ocsd.org/Blotter/BlotterSearch.aspx",
-    'accept-encoding': "gzip, deflate",
-    'accept-language': "en-US,en;q=0.8",
-    'cookie': "ASP.NET_SessionId=a0ooc555m13vlofbtiljc055",
-    'cache-control': "no-cache",
-    'postman-token': "db78fe47-9410-5c06-11b9-759d6524136a"
-    }
-getNotes = False
-noteCaseNum = ''
-#with open('output.html', 'wb') as handle:
-for city in cityList:
-    payload = {'SortBy': '',
-           '__EVENTARGUMENT': '',
-           '__EVENTTARGET': '',
-           '__EVENTVALIDATION': EventValidation,
-           '__SCROLLPOSITIONX': '0',
-           '__SCROLLPOSITIONY': '0',
-           '__VIEWSTATE': ViewState,
-           '__VIEWSTATEGENERATOR': ViewStateGen,
-           'btn7Days.x': '15',
-           'btn7Days.y': '8',
-           'ddlCity': city}
+import datetime
+import  logging
 
 
-    response = requests.request("POST", BlotterURL, data=payload, headers=headers)
-    soup = BeautifulSoup(response.content)
+def tableparse(iterable):
+    iterator = iter(iterable)
+    prev = None
+    item = iterator.next()  # throws StopIteration if empty.
+    for next in iterator:
+        yield (prev,item,next)
+        prev = item
+        item = next
+    yield (prev,item,None)
 
+def arrestparse(db, casenumber):
+    print 'case# %s' %casenumber
+    exist = db.query('SELECT CaseNumber FROM Arrests WHERE CaseNumber=:CaseNum', CaseNum=casenumber, fetchall=True)
+    try:
+        if exist[0]['CaseNumber'] == casenumber:
+            return
+    except:
+        pass
+
+    BlotterURL = "http://ws.ocsd.org/Whoisinjail/search.aspx?FormAction=CallNo&CallNo=%s" % casenumber
+    logger = logging.getLogger(__name__)
+
+
+    r = requests.get(BlotterURL)
+
+    if r.status_code != requests.codes.ok:
+        sys.exit()
+
+    getNotes = False
+    noteCaseNum = ''
+    try:
+        soup = BeautifulSoup(r.content)
+    except AttributeError as e:
+        logger.error(e)
+    if 'ERROR - This page cannot be displayed at this time.' in soup.getText():
+        print 'error on page'
+        sql = '''INSERT INTO Arrests
+             (CaseNumber, Name, DOB, Sex,
+             Race, Status, Height, Bail,
+             Weight, Hair, Location, Eye, Occupation)
+             VALUES (:casenum, :name, :dob, :sex,
+                     :race, :status, :height, :bail,
+                     :weight, :hair, :location, :eye, :occupation)
+        '''
+
+        db.query(sql, casenum=casenumber, name='NULL', dob='NULL', sex='NULL',
+                         race='NULL', status='NULL', height='NULL', bail='NULL',
+                         weight='NULL', hair='NULL', location='NULL', eye='NULL', occupation='NULL'
+                 )
+        return
     table = soup.find("table", cellpadding=4)
     rows = table.findAll("tr")
+    heading = rows[0].findAll('th')
+    for prev, title, next in tableparse(heading):
+        if title.getText() == 'Inmate Name:':
+            name = " ".join(next.getText().split()).replace(' ,', ',')
+            print '%s %s' % (title.getText(), name)
 
     for row in rows:
-        if row.attrs[0] == (u'class', u'trEven') or row.attrs[0] == (u'class', u'trOdd'):
-            cells = row.findAll("td")
-            CaseNum = cells[2].getText()
-            exist = db.query('SELECT CaseNumber FROM Incidents WHERE CaseNumber=:CaseNum', CaseNum=CaseNum, fetchall=True)
-            try:
-                if exist[0]['CaseNumber'] == CaseNum:
-                    print 'the Case number already exists in the database, case: %s, city:%s' %(CaseNum, cityList[city])
-                    if cells[5].getText().replace("&nbsp;", "") == 'read':
-                        print 'has notes'
-                        getNotes = True
-                        noteCaseNum = CaseNum
-                    else:
-                        print 'does not have notes'
-                        getNotes = False
+        cells = row.findAll("td")
+        for prev, cell, next in tableparse(cells):
+            #print '%s, \n%s' % (cell.getText(), next)
+            if cell.getText() == "Date of Birth:":
+                dob = next.getText().replace("&nbsp;", "")
+                print '%s %s' % (cell.getText(), next.getText().replace("&nbsp;", ""))
+            if cell.getText() == "Sex:":
+                sex = next.getText().replace("&nbsp;", "")
+                print '%s %s' % (cell.getText(), next.getText().replace("&nbsp;", ""))
+            if cell.getText() == "Race:":
+                race = next.getText().replace("&nbsp;", "")
+                print '%s %s' % (cell.getText(), next.getText().replace("&nbsp;", ""))
+            if cell.getText() == "Custody Status:":
+                status = next.getText().replace("&nbsp;", "")
+                print '%s %s' % (cell.getText(), next.getText().replace("&nbsp;", ""))
+            if cell.getText() == "Height:":
+                height  = next.getText().replace("&nbsp;", "")
+                print '%s %s' % (cell.getText(), next.getText().replace("&nbsp;", ""))
+            if cell.getText() == "Bail Amount:":
+                bail = next.getText().replace("&nbsp;", "")
+                print '%s %s' % (cell.getText(), next.getText().replace("&nbsp;", ""))
+            if cell.getText() == "Weight:":
+                weight = next.getText().replace("&nbsp;", "")
+                print '%s %s' % (cell.getText(), next.getText().replace("&nbsp;", ""))
+            if cell.getText() == "Hair Color:":
+                hair = next.getText().replace("&nbsp;", "")
+                print '%s %s' % (cell.getText(), next.getText().replace("&nbsp;", ""))
+            if cell.getText() == "Housing Location:":
+                location = next.getText().replace("&nbsp;", "")
+                print '%s %s' % (cell.getText(), next.getText().replace("&nbsp;", ""))
+            if cell.getText() == "Eye Color:":
+                eye = next.getText().replace("&nbsp;", "")
+                print '%s %s' % (cell.getText(), next.getText().replace("&nbsp;", ""))
+            if cell.getText() == "Occupation:":
+                occupation = next.getText().replace("&nbsp;", "")
+                print '%s %s' % (cell.getText(), next.getText().replace("&nbsp;", ""))
 
-            except:
-                getNotes = False
-                print 'incident is new, not adding thats a differnt script'
-        if row.attrs[0] == (u'id', u'trNotes') and getNotes:
-            cells = row.findAll("td")
-            print 'notes say: %s' % row.getText()
-            notes = row.getText()
-            db.query('UPDATE Incidents SET Notes=:note WHERE CaseNumber=:CaseNum', CaseNum=noteCaseNum, note=notes)
+
+
+
+
+
+db = records.Database('sqlite:///blot.db')
+i=0
+#entries = db.query('SELECT CaseNumber,Incident FROM Incidents WHERE Incident LIKE :arrestinfo', arrestinfo='%Arrest Info')
+#entries = db.query('SELECT CaseNumber from Incidents WHERE Aresst=:arrest', arrest=1)
+entries = db.query('''SELECT Incidents.CaseNumber
+                        FROM Incidents
+                        LEFT JOIN Arrests ON Arrests.CaseNumber = Incidents.CaseNumber
+                        WHERE Arrests.CaseNumber IS NULL AND Incidents.Aresst = 1''')
+
+for entry in entries:
+    #splitstring = str.split(str(entry['Incident']), 'Arrest Info')
+    #print splitstring[0]
+    #db.query('UPDATE Incidents SET Incident=:incident, Aresst=:arrested WHERE CaseNumber=:CaseNum', CaseNum=entry['CaseNumber'], incident=splitstring[0], arrested=1)
+
+    arrestparse(db,entry['CaseNumber'])
+
 
 

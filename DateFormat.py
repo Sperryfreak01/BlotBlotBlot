@@ -9,11 +9,13 @@ import datetime
 db = records.Database('sqlite:///blot.db')
 BlotterURL = "http://ws.ocsd.org/Blotter/BlotterSearch.aspx"
 
-#dbentry = db.query('SELECT * from Incidents')
-#    for entry in dbentry
-date_object = datetime.datetime.strptime('3/6/2016 5:15:53 PM', '%m/%d/%Y %I:%M:%S %p')
-week_ago = datetime.datetime.now() - datetime.timedelta(days=7)
-if date_object >= week_ago:
-    print 'true'
-    print date_object
-    print week_ago
+dbentry = db.query('SELECT CaseNumber, "Date" from Incidents')
+for entry in dbentry:
+    try:
+        date_object = datetime.datetime.strptime(entry['Date'], '%m/%d/%Y %I:%M:%S %p')
+        trimmeddate = date_object.strftime('%Y-%m-%d %H:%M')
+        db.query('UPDATE Incidents SET "Date"=:trimmeddate WHERE CaseNumber=:CaseNum', CaseNum=entry['CaseNumber'], trimmeddate=trimmeddate)
+    except ValueError as e:
+        print e
+
+
