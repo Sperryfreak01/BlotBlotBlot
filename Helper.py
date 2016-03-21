@@ -10,10 +10,12 @@ import folium.element
 import cgi
 import logging
 import multiprocessing
+from multiprocessing import pool
 import Scheduler
 import geopy
 
 logger = logging.getLogger(__name__)
+#mappool = multiprocessing.Pool(processes=multiprocessing.cpu_count())              # start 4 worker processes
 
 
 cityList = {'AV':'ALISO VIEJO', 'AN':'ANAHEIM', 'BR':'BREA', 'BP':'BUENA PARK', 'CN':'ORANGE COUNTY',
@@ -88,6 +90,7 @@ def getWebpages():
     logger.info('got a bunch of webpages')
     return responses, cityIndex
 
+
 def getLocation(textLocation, city):
     textLocation = ('%s %s CA') % (textLocation.replace("//", " and "), city)
     #logger.debug(textLocation)
@@ -101,121 +104,217 @@ def getLocation(textLocation, city):
         return joinedLat, joinedLon, g.json['confidence']
     else:
         logger.warning('Unable to geocode incident location: %s' % g.json)
-        return 37.8267, -122.4233, 0
+        return 37.8267, -122.4233, -1
 
-def crimeParser(db, response,city):
 
+def crimeParser(db, response, city):
     logger.info('going through %s' % city)
     getNotes = False
     noteCaseNum = ''
+
     try:
         soup = BeautifulSoup(response.content)
     except AttributeError as e:
         logger.error(e)
         return
+
+    # OCBlotter stores incidents in odd/even rows in table, columns are known so we don't need the column titles
+    # Only discerning property of the table is the cell padding, this is weak and easily broken.
+    # To get the notes we have too look for "read" in the notes column and then get the next row (not odd or even)
+    # Arrest info is scrapped from a second webpage when there is "Arrest Info" in the Incident column
     table = soup.find("table", cellpadding=4)
     rows = table.findAll("tr")
 
     for row in rows:
+        # Stepping through the incident table and parsing each row
         if row.attrs[0] == (u'class', u'trEven') or row.attrs[0] == (u'class', u'trOdd'):
             cells = row.findAll("td")
             IncidentDate = cells[0].getText()
             date_object = datetime.datetime.strptime(IncidentDate, '%m/%d/%Y %I:%M:%S %p')
-            trimmeddate = date_object.strftime('%Y-%m-%d %H:%M')
+            trimmeddate = date_object.strftime('%Y-%m-%d %H:%M')  # convert to a format that is easier to search for
             CaseNum = cells[2].getText()
-            Description = cells[3].getText().replace("&nbsp;", "")
+            Description = cells[3].getText().replace("&nbsp;", "")  # get rid of the pesky web formating
             IncidentLocation = cells[4].getText()
-            exist = db.query('SELECT CaseNumber FROM Incidents WHERE CaseNumber=:CaseNum', CaseNum=CaseNum, fetchall=True)
-            try:
-                if exist[0]['CaseNumber'] == CaseNum:
-                    logger.debug('the Case number already exists in the database, case: %s, city:%s' %(CaseNum, cityList[city]))
-                    if cells[5].getText().replace("&nbsp;", "") == 'read':
-                        logger.debug('has notes')
-                        getNotes = True
-                        noteCaseNum = CaseNum
-                    else:
-                        logger.debug('does not have notes')
-                        getNotes = False
-            except:
-                getNotes = False
-                logger.debug('Found a new incident %s' % CaseNum)
+
+            # Check to see if the incident we are processing is already in the db
+            exist = db.query('SELECT CaseNumber FROM Incidents WHERE CaseNumber=:CaseNum', CaseNum=CaseNum)
+            exist = exist.all(as_dict=True)
+            if not exist:
+                # Arrest parsing
                 if 'Arrest Info' in Description:
-                    logging.info('subject arrested')
+                    logging.debug('subject in case Number: %s arrested' % CaseNum)
                     arrestparse(db, CaseNum)
                     arrested = 1
                 else:
                     arrested = 0
-                    logging.info('no arrests')
+                    logging.debug('No arrest in case Number: %s' % CaseNum)
+
+                if cells[5].getText().replace("&nbsp;", "") == 'read':  # seeing if we need to check for updated notes
+                    logger.debug('Case number: %s has notes' % CaseNum)
+                    getNotes = True  # Since there are notes we set the flag to get the notes, stored in next row
+                    noteCaseNum = CaseNum
+                else:
+                    logger.debug('Case number: %s does not have notes' % CaseNum)
+                    getNotes = False  # No notes, no flag, don't need the next row
+                logger.debug('Found a new incident %s' % CaseNum)
+
+               # Logging the incident to the database
                 lat, lon, confidence = getLocation(IncidentLocation, cityList[city])
                 db.query('INSERT INTO Incidents (CaseNumber, Incident, Location, "Date", Lat, Lon, City, CONFIDENCE, Aresst) VALUES (:CaseNum, :Description, :IncidentLocation, :IncidentDate, :lat, :lon, :city, :confidence, :arrested)',
                           CaseNum=CaseNum, Description=Description, IncidentLocation=IncidentLocation, IncidentDate=trimmeddate, lat=lat, lon=lon, city=city, confidence=confidence, arrested=arrested)
-                if 'Arrest Info' in Description:
-                    arrestparse(db, CaseNum)
-        if row.attrs[0] == (u'id', u'trNotes') and getNotes:
-            cells = row.findAll("td")
-            notes = row.getText()
-            logger.debug('scrapped notes say: %s' % notes)
-            exist = db.query('SELECT Notes FROM Incidents WHERE CaseNumber=:CaseNum', CaseNum=noteCaseNum, fetchall=True)
-            try:
-                if exist[0]['Notes'] == notes:
-                    logger.debug('notes are up to date')
-                    pass
+
+            else:
+                logger.debug('the case number already exists in the DB, case: %s, city:%s' % (CaseNum, cityList[city]))
+                if cells[5].getText().replace("&nbsp;", "") == 'read':  # seeing if we need to check for updated notes
+                    logger.debug('Case number: %s has notes' % CaseNum)
+                    getNotes = True  # Since there are notes we set the flag to get the notes, stored in next row
+                    noteCaseNum = CaseNum
                 else:
-                    logger.debug('notes out of date')
-                    db.query('UPDATE Incidents SET Notes=:note WHERE CaseNumber=:CaseNum', CaseNum=noteCaseNum, note=notes)
-            except:
+                    logger.debug('Case number: %s does not have notes' % CaseNum)
+                    getNotes = False  # No notes, no flag, don't need the next row.
+
+        # Parsing through the notes if a note row exits and it was flagged for logging
+        if row.attrs[0] == (u'id', u'trNotes') and getNotes:
+            #cells = row.findAll("td")
+            notes = row.getText()
+            exist = db.query('SELECT Notes FROM Incidents WHERE CaseNumber=:CaseNum', CaseNum=noteCaseNum)
+            exist = exist.all(as_dict=True)
+            if not exist:
                 logger.debug('db has no notes')
+                logger.debug('scrapped notes say: %s' % notes)
+                db.query('UPDATE Incidents SET Notes=:note WHERE CaseNumber=:CaseNum', CaseNum=noteCaseNum, note=notes)
+            elif exist[0]['Notes'] == notes:
+                logger.debug('scrapped notes say: %s' % notes)
+                logger.debug('notes are up to date')
+            else:
+                logger.debug('notes out of date')
+                logger.debug('scrapped notes say: %s \n db says: %s' % (notes, exist[0]['Notes']))
                 db.query('UPDATE Incidents SET Notes=:note WHERE CaseNumber=:CaseNum', CaseNum=noteCaseNum, note=notes)
 
-def renderMap(datapoints, popups, city, days ):
-    map_osm = folium.Map(location=[33.6700, -117.7800], width='75%', height='75%')
-    map_osm.add_children(folium.plugins.MarkerCluster(datapoints, popups))
-    #map_osm.render()
-    map_osm.save('./maps/%sMap%s.html' % (city, days))
-    print '%s map complete' % city
 
-def scheduleMap(datapoints, popups, city, days):
-    p = multiprocessing.Process(target=renderMap, args=(datapoints, popups, city, days))
+def renderMap(datapoints, popups, markers, city, days):  #TODO center map on city and fix zoom
+    #folium_figure = m.get_root()
+    #folium_figure.header._children['bootstrap'] = folium.element.JavascriptLink('{{another url of your choice}}')
+    map_osm = folium.Map(location=[33.6700, -117.7800], width='75%', height='75%')
+    for datapoint,popup,marker in zip(datapoints, popups, markers):
+        map_osm.add_children(folium.plugins.MarkerCluster(datapoint, popup, icons=marker))
+    map_osm.save('./maps/%sMap%s.html' % (city, days))
+    logger.debug('%s map complete' % city)
+
+def scheduleMap(datapoints, popups, markers, city, days):
+    #mappool.apply_async(target=renderMap, args=(datapoints, popups, markers, city, days))
+    p = multiprocessing.Process(target=renderMap, args=(datapoints, popups, markers, city, days))
     p.start()
-    p.join()
+    p.join(0)
+
+
+def arrestinfogen(arrestinfo, casenumber):
+    for arrest in arrestinfo:
+        if arrest['CaseNumber'] == casenumber:
+            return arrest
+    return None
+
 
 def createMap(db, days=0, month=None):
     if days > 0:
-        week_ago =  datetime.datetime.now() - datetime.timedelta(days=days)
-        week_ago = week_ago.strftime('%Y-%m-%d %H:%M')
+        mapstartdate =  datetime.datetime.now() - datetime.timedelta(days=days)
+        mapstartdate = mapstartdate.strftime('%Y-%m-%d %H:%M')
 
-    jobs = []
     for city in cityList:
         datapoints = []
         popups = []
+        markers = []
+
+        calldatapoints = []
+        callpopups = []
+        callmarkers = []
+
+        arrestdatapoints = []
+        arrestpopups = []
+        arrestmarkers = []
+
         logger.debug('creating %s day map for %s' % (days, city))
-        dbIncidents = db.query('SELECT * from Incidents WHERE "Date" > :daterange AND City=:city', daterange=week_ago, city=city)
+
+        #  Get all of the incidents and arrests since teh specified date
+        dbIncidents = db.query('SELECT * from Incidents WHERE "Date" > :daterange AND City=:city', daterange=mapstartdate, city=city)
+        dbArrests = db.query('''SELECT Arrests.* FROM Arrests
+                                INNER JOIN Incidents ON Arrests.CaseNumber = Incidents.CaseNumber
+                                WHERE Incidents.Date > :daterange''',
+                                daterange =mapstartdate
+                             )
 
         for entry in dbIncidents:
-            datapoints.append((entry['Lat'], entry['Lon']))
+            arrestnotes = ''
+            arrest = False
+            if entry['Aresst'] == 1:
+                dbarrestinfo = arrestinfogen(dbArrests, entry['CaseNumber'])
+                if dbarrestinfo is not None: #If there is a matching incident get details and assemble the html
+                    arrest = True
+                    arrestnotes = '''<dt><b>Arrest Info</b></dt>
+                                     <dd> Name: %s </dd>
+                                     <dd> Status: %s </dd>
+                                     <dd> Location: %s </dd>
+                                     <dd> Bail: %s </dd>
+                                     <dd> DOB: %s </dd>
+                                     <dd> Sex: %s </dd>
+                                     <dd> Race: %s </dd>
+                                     <dd> Height: %s </dd>
+                                     <dd> Weight: %s </dd>
+                                     <dd> Hair: %s </dd>
+                                     <dd> Eye: %s </dd>
+                                     <dd> Occupation: %s </dd>
+                                  ''' % (dbarrestinfo['Name'], dbarrestinfo['Status'], dbarrestinfo['Location'],
+                                        dbarrestinfo['Bail'], dbarrestinfo['DOB'], dbarrestinfo['Sex'], dbarrestinfo['Race'],
+                                        dbarrestinfo['Height'], dbarrestinfo['Weight'], dbarrestinfo['Hair'],
+                                        dbarrestinfo['Eye'], dbarrestinfo['Occupation'])
 
             formatedNotes = str(entry['Notes']).replace('\r','')
             formatedNotes = cgi.escape(formatedNotes)
             html = '''<dl>
-                              <dt><b> %s </b></dt>
-                               <dd> Case Number: %s </dd>
-                               <dd> Description: %s </dd>
-                               <dd> Reported Location: %s </dd>
-                              <dt>Notes</dt>
-                               <dd> %s </dd>
-                            </dl>''' % (entry['CaseNumber'], entry['Incident'], entry['Date'], entry['Location'], formatedNotes)
+                       <dt><b> %s </b></dt>
+                        <dd> Case Number: %s </dd>
+                        <dd> Description: %s </dd>
+                        <dd> Reported Location: %s </dd>
+                       <dt><b>Notes</b></dt>
+                        <dd> %s </dd>
+                        %s
+                     </dl>''' % (entry['Incident'], entry['CaseNumber'], entry['Date'], entry['Location'],
+                                formatedNotes, arrestnotes)
 
             iframe = folium.element.IFrame(html=html, width=500, height=300)
-            popups.append(folium.Popup(iframe, max_width=2650))
-            #popups.append(folium.Popup(html=html))
-        logger.debug('appending multiprocessing job %s' % city)
-        Scheduler.schedule(scheduleMap, args=[datapoints, popups, city, days])
 
+            # Create 2 different datasets, arrests and calls
+            if arrest:
+                arrestdatapoints.append((entry['Lat'], entry['Lon']))
+                arrestpopups.append(folium.Popup(iframe, max_width=2650))
+                if dbarrestinfo['Sex'] == 'Female':
+                    arrestmarkers.append(folium.Icon(color='lightred', icon='flash'))
+                elif dbarrestinfo['Sex'] == 'Male':
+                    arrestmarkers.append(folium.Icon(color='blue', icon='flash'))
+                else:
+                    arrestmarkers.append(folium.Icon(color='lightgray', icon='flash'))
+
+            else:
+                calldatapoints.append((entry['Lat'], entry['Lon']))
+                callpopups.append(folium.Popup(iframe, max_width=2650))
+                callmarkers.append(folium.Icon(color='green', icon='phone-alt'))
+
+        datapoints = [arrestdatapoints, calldatapoints]
+        popups = [arrestpopups, callpopups]
+        markers = [arrestmarkers, callmarkers]
+
+        logger.debug('appending multiprocessing job %s' % city)
+        jobname = ('%s %sday' % (city, days))
+        #Scheduler.schedule(scheduleMap, name=jobname, args=[datapoints, popups, markers, city, days])
+
+        scheduleMap(datapoints, popups, markers, city, days)
 
 def databaseupdate(db):
     webpages, cityIndex  = getWebpages()
-    threads = [gevent.spawn(crimeParser, db, response, city) for response, city in zip(webpages, cityIndex)]
-    gevent.joinall(threads)
+    #threads = [gevent.spawn(crimeParser, db, response, city) for response, city in zip(webpages, cityIndex)]
+    #gevent.joinall(threads)
+    for response, city in zip(webpages, cityIndex):
+        crimeParser(db, response, city)
 
 
 def tableparse(iterable):
@@ -228,18 +327,14 @@ def tableparse(iterable):
         item = next
     yield (prev,item,None)
 
+
 def arrestparse(db, casenumber):
-    print 'case# %s' %casenumber
-    exist = db.query('SELECT CaseNumber FROM Arrests WHERE CaseNumber=:CaseNum', CaseNum=casenumber, fetchall=True)
-    try:
-        if exist[0]['CaseNumber'] == casenumber:
-            return
-    except:
-        pass
+    logger.debug('Arrest parsing case# %s' %casenumber)
 
     BlotterURL = "http://ws.ocsd.org/Whoisinjail/search.aspx?FormAction=CallNo&CallNo=%s" % casenumber
-    r = requests.get(BlotterURL)
+    name = dob = sex = race = status = height = bail = weight = hair = location = eye = occupation = None
 
+    r = requests.get(BlotterURL)
     if r.status_code != requests.codes.ok:
         sys.exit()
 
@@ -249,7 +344,13 @@ def arrestparse(db, casenumber):
         logger.error(e)
 
     if 'ERROR - This page cannot be displayed at this time.' in soup.getText():
-        print 'error on page'
+        logger.warning('error on page while parseing case# %s \n%s' % (casenumber, soup.getText()))
+        sql = '''INSERT INTO Arrests (CaseNumber, Name, DOB, Sex, Race, Status, Height, Bail, Weight, Hair, Location,
+                 Eye, Occupation) VALUES (:casenum, :name, :dob, :sex, :race, :status, :height, :bail, :weight, :hair,
+                 :location, :eye, :occupation)
+              '''
+        db.query(sql, casenum=casenumber, name=name, dob=dob, sex=sex, race=race, status=status, height=height,
+                 bail=bail, weight=weight, hair=hair, location=location, eye=eye, occupation=occupation )
         return
 
     table = soup.find("table", cellpadding=4)
@@ -258,65 +359,53 @@ def arrestparse(db, casenumber):
     for prev, title, next in tableparse(heading):
         if title.getText() == 'Inmate Name:':
             name = " ".join(next.getText().split()).replace(' ,', ',')
-            print '%s %s' % (title.getText(), name)
+            logger.debug('%s %s' % (title.getText(), name))
 
     for row in rows:
         cells = row.findAll("td")
         for prev, cell, next in tableparse(cells):
-            #print '%s, \n%s' % (cell.getText(), next)
+            # logger.debug( '%s, \n%s' % (cell.getText(), next))
             if cell.getText() == "Date of Birth:":
-                dob = next.getText().replace("&nbsp;", "")
-                print '%s %s' % (cell.getText(), next.getText().replace("&nbsp;", ""))
+                 dob = next.getText().replace("&nbsp;", "")
+                 logger.debug('%s %s' % (cell.getText(), next.getText().replace("&nbsp;", "")))
             if cell.getText() == "Sex:":
-                sex = next.getText().replace("&nbsp;", "")
-                print '%s %s' % (cell.getText(), next.getText().replace("&nbsp;", ""))
+                 sex = next.getText().replace("&nbsp;", "")
+                 logger.debug('%s %s' % (cell.getText(), next.getText().replace("&nbsp;", "")))
             if cell.getText() == "Race:":
                 race = next.getText().replace("&nbsp;", "")
-                print '%s %s' % (cell.getText(), next.getText().replace("&nbsp;", ""))
+                logger.debug('%s %s' % (cell.getText(), next.getText().replace("&nbsp;", "")))
             if cell.getText() == "Custody Status:":
                 status = next.getText().replace("&nbsp;", "")
-                print '%s %s' % (cell.getText(), next.getText().replace("&nbsp;", ""))
+                logger.debug('%s %s' % (cell.getText(), next.getText().replace("&nbsp;", "")))
             if cell.getText() == "Height:":
                 height  = next.getText().replace("&nbsp;", "")
-                print '%s %s' % (cell.getText(), next.getText().replace("&nbsp;", ""))
+                logger.debug('%s %s' % (cell.getText(), next.getText().replace("&nbsp;", "")))
             if cell.getText() == "Bail Amount:":
                 bail = next.getText().replace("&nbsp;", "")
-                print '%s %s' % (cell.getText(), next.getText().replace("&nbsp;", ""))
+                logger.debug('%s %s' % (cell.getText(), next.getText().replace("&nbsp;", "")))
             if cell.getText() == "Weight:":
                 weight = next.getText().replace("&nbsp;", "")
-                print '%s %s' % (cell.getText(), next.getText().replace("&nbsp;", ""))
+                logger.debug('%s %s' % (cell.getText(), next.getText().replace("&nbsp;", "")))
             if cell.getText() == "Hair Color:":
                 hair = next.getText().replace("&nbsp;", "")
-                print '%s %s' % (cell.getText(), next.getText().replace("&nbsp;", ""))
+                logger.debug('%s %s' % (cell.getText(), next.getText().replace("&nbsp;", "")))
             if cell.getText() == "Housing Location:":
                 location = next.getText().replace("&nbsp;", "")
-                print '%s %s' % (cell.getText(), next.getText().replace("&nbsp;", ""))
+                logger.debug('%s %s' % (cell.getText(), next.getText().replace("&nbsp;", "")))
             if cell.getText() == "Eye Color:":
                 eye = next.getText().replace("&nbsp;", "")
-                print '%s %s' % (cell.getText(), next.getText().replace("&nbsp;", ""))
+                logger.debug('%s %s' % (cell.getText(), next.getText().replace("&nbsp;", "")))
             if cell.getText() == "Occupation:":
                 occupation = next.getText().replace("&nbsp;", "")
-                print '%s %s' % (cell.getText(), next.getText().replace("&nbsp;", ""))
+                logger.debug('%s %s' % (cell.getText(), next.getText().replace("&nbsp;", "")))
 
+    logger.debug('inserting new arrest info %s' % casenumber)
+    sql = '''INSERT INTO Arrests (CaseNumber, Name, DOB, Sex, Race, Status, Height, Bail, Weight, Hair, Location,
+             Eye, Occupation) VALUES (:casenum, :name, :dob, :sex, :race, :status, :height, :bail, :weight, :hair,
+             :location, :eye, :occupation)
+            '''
 
-    sql = '''INSERT INTO Arrests
-             (CaseNumber, Name, DOB, Sex,
-             Race, Status, Height, Bail,
-             Weight, Hair, Location, Eye, Occupation)
-             VALUES (:casenum, :name, :dob, :sex,
-                     :race, :status, :height, :bail,
-                     :weight, :hair, :location, :eye, :occupation)
-        '''
-
-    db.query(sql, casenum=casenumber, name=name, dob=dob, sex=sex,
-                     race=race, status=status, height=height, bail=bail,
-                     weight=weight, hair=hair, location=location, eye=eye, occupation=occupation
+    db.query(sql, casenum=casenumber, name=name, dob=dob, sex=sex, race=race, status=status, height=height, bail=bail,
+             weight=weight, hair=hair, location=location, eye=eye, occupation=occupation
              )
-
-
-
-
-
-
-
-
+    return

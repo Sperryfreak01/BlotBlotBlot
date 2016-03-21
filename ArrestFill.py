@@ -17,12 +17,13 @@ def tableparse(iterable):
         item = next
     yield (prev,item,None)
 
+
 def arrestparse(db, casenumber):
-    print 'case# %s' %casenumber
     exist = db.query('SELECT CaseNumber FROM Arrests WHERE CaseNumber=:CaseNum', CaseNum=casenumber, fetchall=True)
+    exsisting = False
     try:
         if exist[0]['CaseNumber'] == casenumber:
-            return
+            exsisting = True
     except:
         pass
 
@@ -41,22 +42,31 @@ def arrestparse(db, casenumber):
         soup = BeautifulSoup(r.content)
     except AttributeError as e:
         logger.error(e)
+
     if 'ERROR - This page cannot be displayed at this time.' in soup.getText():
         print 'error on page'
-        sql = '''INSERT INTO Arrests
-             (CaseNumber, Name, DOB, Sex,
-             Race, Status, Height, Bail,
-             Weight, Hair, Location, Eye, Occupation)
-             VALUES (:casenum, :name, :dob, :sex,
-                     :race, :status, :height, :bail,
-                     :weight, :hair, :location, :eye, :occupation)
-        '''
+        print 'case# %s' %casenumber
+        exist = db.query('SELECT CaseNumber FROM Arrests WHERE CaseNumber=:CaseNum', CaseNum=casenumber, fetchall=True)
 
-        db.query(sql, casenum=casenumber, name='NULL', dob='NULL', sex='NULL',
-                         race='NULL', status='NULL', height='NULL', bail='NULL',
-                         weight='NULL', hair='NULL', location='NULL', eye='NULL', occupation='NULL'
-                 )
-        return
+        if exsisting:
+            return
+        else:
+            sql = '''INSERT INTO Arrests
+            (CaseNumber, Name, DOB, Sex,
+            Race, Status, Height, Bail,
+            Weight, Hair, Location, Eye, Occupation)
+            VALUES (:casenum, :name, :dob, :sex,
+                 :race, :status, :height, :bail,
+                 :weight, :hair, :location, :eye, :occupation)
+            '''
+            db.query(sql, casenum=casenumber, name=None, dob=None, sex=None,
+                             race=None, status=None, height=None, bail=None,
+                             weight=None, hair=None, location=None, eye=None, occupation=None
+                     )
+
+        return  # TODO stuff here
+    name = dob = sex = race = status = height = bail = weight  = hair = location = eye = occupation = None
+
     table = soup.find("table", cellpadding=4)
     rows = table.findAll("tr")
     heading = rows[0].findAll('th')
@@ -103,6 +113,31 @@ def arrestparse(db, casenumber):
                 occupation = next.getText().replace("&nbsp;", "")
                 print '%s %s' % (cell.getText(), next.getText().replace("&nbsp;", ""))
 
+    if exsisting:
+        print casenumber
+        print 'case already in db updating arest info'
+        sql = 'UPDATE Arrests SET Arrests.Name=:name, DOB=:dob, Sex=:sex, Race=:race, Status=:status, Height=:height, Bail=:bail, =:weight, Hair=:hair, Location=:location, Eye=:eye, Occupation=:occupation WHERE CaseNumber=:casenum'
+
+        db.query(sql, casenum=casenumber, name=name, dob=dob, sex=sex,
+                         race=race, status=status, height=height, bail=bail,
+                         weight=weight, hair=hair, location=location, eye=eye, occupation=occupation
+                 )
+        return
+    else:
+        print 'casenew inserting arrest info'
+        sql = '''INSERT INTO Arrests
+                (CaseNumber, Name, DOB, Sex,
+                Race, Status, Height, Bail,
+                Weight, Hair, Location, Eye, Occupation)
+                VALUES (:casenum, :name, :dob, :sex,
+                     :race, :status, :height, :bail,
+                     :weight, :hair, :location, :eye, :occupation)
+                '''
+
+        db.query(sql, casenum=casenumber, name=name, dob=dob, sex=sex,
+                         race=race, status=status, height=height, bail=bail,
+                         weight=weight, hair=hair, location=location, eye=eye, occupation=occupation
+                 )
 
 
 
@@ -112,10 +147,13 @@ db = records.Database('sqlite:///blot.db')
 i=0
 #entries = db.query('SELECT CaseNumber,Incident FROM Incidents WHERE Incident LIKE :arrestinfo', arrestinfo='%Arrest Info')
 #entries = db.query('SELECT CaseNumber from Incidents WHERE Aresst=:arrest', arrest=1)
-entries = db.query('''SELECT Incidents.CaseNumber
-                        FROM Incidents
-                        LEFT JOIN Arrests ON Arrests.CaseNumber = Incidents.CaseNumber
-                        WHERE Arrests.CaseNumber IS NULL AND Incidents.Aresst = 1''')
+#entries = db.query('''SELECT Incidents.CaseNumber
+#                        FROM Incidents
+#                        LEFT JOIN Arrests ON Arrests.CaseNumber = Incidents.CaseNumber
+#                        WHERE Arrests.CaseNumber IS NULL AND Incidents.Aresst = 1''')
+
+#entries = db.query('SELECT CaseNumber from Arrests WHERE DOB=:null', null='NULL')
+
 
 for entry in entries:
     #splitstring = str.split(str(entry['Incident']), 'Arrest Info')

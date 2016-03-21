@@ -28,15 +28,16 @@ start = time.time()
 
 if __name__ == '__main__':
     atexit.register(endprog)
-    #Scheduler.schedule(Helper.createMap, args=[db, 14])
     bottleApp = bottle.default_app()
     bottleApp.merge(Webinterface.WebApp)
     Scheduler.schedule(Helper.databaseupdate, args=[db])
+    Scheduler.schedule(Helper.createMap, args=[db, 1])
     Scheduler.schedule(Helper.databaseupdate, args=[db], id='updater', trigger='interval', minutes=5)
     Scheduler.schedule(Helper.createMap, args=[db, 1], id='map1', trigger='interval', minutes=15)
     Scheduler.schedule(Helper.createMap, args=[db, 7], id='map7', trigger='interval', minutes=30)
-    Scheduler.schedule(Helper.createMap, args=[db, 14], id='map14', trigger='interval', minutes=60)
-    Scheduler.schedule(Helper.createMap, args=[db, 30], id='map30', trigger='interval', minutes=120)
+    #Scheduler.schedule(Helper.createMap, args=[db, 14], id='map14', trigger='interval', minutes=60)
+    #Scheduler.schedule(Helper.createMap, args=[db, 30], id='map30', trigger='interval', minutes=120)
+
 
 
     ########################################################################
